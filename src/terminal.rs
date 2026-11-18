@@ -91,6 +91,7 @@ mod imp {
     const ENABLE_ECHO_INPUT: u32 = 0x0004;
     const ENABLE_LINE_INPUT: u32 = 0x0002;
     const ENABLE_PROCESSED_INPUT: u32 = 0x0001;
+    const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x0004;
 
     #[repr(C)]
     struct COORD {
@@ -115,7 +116,8 @@ mod imp {
         dw_maximum_window_size: COORD,
     }
 
-    static mut ORIG_MODE: u32 = 0;
+    static mut ORIG_INPUT_MODE: u32 = 0;
+    static mut ORIG_OUTPUT_MODE: u32 = 0;
     static mut MODE_SAVED: bool = false;
 
     unsafe extern "system" {
@@ -152,17 +154,30 @@ mod imp {
 
     pub fn setup_raw_mode() {
         unsafe {
-            let h = GetStdHandle(STD_INPUT_HANDLE);
-            if h.is_null() {
-                return;
+            // --- Input: disable echo/line/processed input ---
+            let hin = GetStdHandle(STD_INPUT_HANDLE);
+            if !hin.is_null() {
+                let mut mode: u32 = 0;
+                if GetConsoleMode(hin, &mut mode) != 0 {
+                    ORIG_INPUT_MODE = mode;
+                    let raw = mode & !(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT);
+                    let _ = SetConsoleMode(hin, raw);
+                }
             }
-            let mut mode: u32 = 0;
-            if GetConsoleMode(h, &mut mode) != 0 {
-                ORIG_MODE = mode;
-                MODE_SAVED = true;
-                let raw = mode & !(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT);
-                let _ = SetConsoleMode(h, raw);
+
+            // --- Output: enable virtual terminal (ANSI) processing ---
+            let hout = GetStdHandle(STD_OUTPUT_HANDLE);
+            if !hout.is_null() {
+                let mut mode: u32 = 0;
+                if GetConsoleMode(hout, &mut mode) != 0 {
+                    ORIG_OUTPUT_MODE = mode;
+                    let vt = mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+                    let _ = SetConsoleMode(hout, vt);
+                }
             }
+
+            MODE_SAVED = true;
+
             // Register Ctrl-C / close handler so the terminal is restored on exit.
             let _ = SetConsoleCtrlHandler(Some(signal_handler), 1);
         }
@@ -171,9 +186,13 @@ mod imp {
     pub unsafe fn cleanup_terminal() {
         unsafe {
             if MODE_SAVED {
-                let h = GetStdHandle(STD_INPUT_HANDLE);
-                if !h.is_null() {
-                    let _ = SetConsoleMode(h, ORIG_MODE);
+                let hin = GetStdHandle(STD_INPUT_HANDLE);
+                if !hin.is_null() {
+                    let _ = SetConsoleMode(hin, ORIG_INPUT_MODE);
+                }
+                let hout = GetStdHandle(STD_OUTPUT_HANDLE);
+                if !hout.is_null() {
+                    let _ = SetConsoleMode(hout, ORIG_OUTPUT_MODE);
                 }
             }
         }
