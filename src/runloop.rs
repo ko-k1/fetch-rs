@@ -5,6 +5,11 @@ use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
 
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::System::Console::{
+    GetNumberOfConsoleInputEvents, GetStdHandle, INPUT_RECORD, ReadConsoleInputA, STD_INPUT_HANDLE,
+};
+
 use crate::app::App;
 use crate::render::apply_layout;
 use crate::terminal::{get_term_size, TERM_RESIZED};
@@ -173,7 +178,53 @@ fn read_input(app: &mut App) -> bool {
     should_break
 }
 
-#[cfg(not(unix))]
+/// Returns true if the main loop should break (key pressed).
+#[cfg(target_os = "windows")]
+fn read_input(app: &mut App) -> bool {
+    let _ = app;
+
+    unsafe {
+        let stdin = GetStdHandle(STD_INPUT_HANDLE);
+        let mut count: u32 = 0;
+        if GetNumberOfConsoleInputEvents(stdin, &mut count) == 0 || count == 0 {
+            return false;
+        }
+        let mut should_break = false;
+        let mut buf: [INPUT_RECORD; 16] = std::mem::zeroed();
+        let mut remaining = count;
+        while remaining > 0 {
+            let to_read = remaining.min(16) as u32;
+            let mut read: u32 = 0;
+            if ReadConsoleInputA(stdin, buf.as_mut_ptr(), to_read, &mut read) == 0 || read == 0 {
+                break;
+            }
+            let slice = std::slice::from_raw_parts(buf.as_ptr(), read as usize);
+            for rec in slice {
+                match rec.EventType as u32 {
+                    0x0001 => {
+                        // KEY_EVENT
+                        let key = rec.Event.KeyEvent;
+                        if key.bKeyDown != 0 {
+                            should_break = true;
+                        }
+                    }
+                    0x0004 => {
+                        // WINDOW_BUFFER_SIZE_EVENT
+                        TERM_RESIZED.store(true, Ordering::SeqCst);
+                    }
+                    _ => {}
+                }
+            }
+            if read < to_read {
+                break;
+            }
+            remaining -= read;
+        }
+        should_break
+    }
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
 fn read_input(_app: &mut App) -> bool {
     false
 }

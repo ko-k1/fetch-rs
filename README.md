@@ -155,11 +155,14 @@ fetch --shading-chars '█▓▒░ '
 
 ## Platform support
 
-- **Linux** (primary): `/proc`, `/sys`, DRM, `libc` uname/signals/raw mode
-- **macOS**: `sysctl`-based info (model, CPU brand, memory, uptime), Apple
-  Silicon GPU detection
-- Other platforms: the crate compiles, but info gathering is best-effort or
-  stubbed
+| Platform | Status | Info sources |
+|----------|--------|--------------|
+| **Linux** (primary) | Full | `/proc`, `/sys`, DRM, `libc` (uname/signals/raw mode) |
+| **macOS** | Full | `sysctl` (model, CPU brand, memory, uptime), Apple Silicon GPU |
+| **Windows** | Full | PowerShell `Get-CimInstance` (OS, host, CPU, GPU, memory, swap, disk, battery), `ver` (kernel), `winget` (packages), `ipconfig` (IP), `COMSPEC` (shell) |
+| Other | Compiles | Best-effort / stubbed info |
+
+Windows and macOS are first-class targets alongside Linux; the crate compiles and runs on all three.
 
 ## License
 

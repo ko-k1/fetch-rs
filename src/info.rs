@@ -34,6 +34,27 @@ fn count_file_lines(path: &str, prefix: Option<&str>) -> i32 {
 }
 
 // ---------------------------------------------------------------------------
+// PowerShell helper (Windows)
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "windows")]
+fn ps(command: &str) -> Option<String> {
+    let out = std::process::Command::new("powershell")
+        .arg("-NoProfile")
+        .arg("-Command")
+        .arg(command)
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let text = text.trim();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.to_string())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // uname
 // ---------------------------------------------------------------------------
 
@@ -123,7 +144,31 @@ pub fn gather_os() -> Option<String> {
         }
         None
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        let caption = ps("(Get-CimInstance Win32_OperatingSystem).Caption");
+        let version = ps("(Get-CimInstance Win32_OperatingSystem).Version");
+        let build = ps("(Get-CimInstance Win32_OperatingSystem).BuildNumber");
+        let mut os = String::new();
+        if let Some(c) = caption {
+            os.push_str(&c);
+        }
+        if let Some(v) = version {
+            if !os.is_empty() {
+                os.push(' ');
+            }
+            os.push_str(&v);
+        }
+        if let Some(b) = build {
+            os.push_str(&format!(" (build {b})"));
+        }
+        if os.is_empty() {
+            None
+        } else {
+            Some(os)
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let mut pretty = String::new();
         if let Ok(t) = std::fs::read_to_string("/etc/os-release") {
@@ -170,7 +215,20 @@ pub fn gather_host() -> Option<String> {
         }
         None
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        let model = ps("(Get-CimInstance Win32_ComputerSystem).Model");
+        let manufacturer = ps("(Get-CimInstance Win32_ComputerSystem).Manufacturer");
+        match (model, manufacturer) {
+            (Some(m), Some(v)) if !v.to_lowercase().starts_with(&m.to_lowercase()) => {
+                Some(format!("{v} {m}"))
+            }
+            (Some(m), _) => Some(m),
+            (_, Some(v)) => Some(v),
+            _ => None,
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let mut model = String::new();
         if let Some(m) = read_first_line("/proc/device-tree/model") {
@@ -193,7 +251,23 @@ pub fn gather_host() -> Option<String> {
 // ---------------------------------------------------------------------------
 
 pub fn gather_kernel() -> Option<String> {
-    uname_fields().map(|(sysname, release, _machine)| format!("{sysname} {release}"))
+    #[cfg(target_os = "windows")]
+    {
+        // "Microsoft Windows [Version 10.0.22631.4249]"
+        let out = std::process::Command::new("cmd")
+            .arg("/C")
+            .arg("ver")
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        let start = text.find("Version ")? + "Version ".len();
+        let end = text[start..].find(']')?;
+        Some(text[start..start + end].trim().to_string())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        uname_fields().map(|(sysname, release, _machine)| format!("{sysname} {release}"))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -220,7 +294,11 @@ pub fn gather_uptime() -> Option<String> {
         let secs = unsafe { libc::time(std::ptr::null_mut()) } - bt.tv_sec;
         Some(format_uptime(secs))
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        ps("$u=(Get-Date)-(Get-CimInstance Win32_OperatingSystem).LastBootUpTime; \"{0} days, {1} hours, {2} minutes\" -f $u.Days,$u.Hours,$u.Minutes")
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let text = std::fs::read_to_string("/proc/uptime").ok()?;
         let secs: f64 = text.split_whitespace().next()?.parse().ok()?;
@@ -276,7 +354,25 @@ pub fn gather_packages() -> Option<String> {
         }
         None
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        // winget (modern Windows)
+        let mut val = String::new();
+        if let Ok(out) = std::process::Command::new("winget")
+            .arg("list")
+            .output()
+        {
+            let n = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .count()
+                .saturating_sub(2) as i32; // header + separator line
+            if n > 0 {
+                val = format!("{n} (winget)");
+            }
+        }
+        if val.is_empty() { None } else { Some(val) }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let mut val = String::new();
 
@@ -445,11 +541,20 @@ fn is_shell_name(s: &str) -> bool {
 }
 
 pub fn gather_shell() -> Option<(String, Option<String>)> {
-    let shell = crate::util::parent_comm(is_shell_name)
-        .or_else(|| std::env::var("SHELL").ok())?;
-    let name = shell.rsplit('/').next().unwrap_or(&shell).to_string();
-    let version = get_cmd_version(&shell);
-    Some((name, version))
+    #[cfg(target_os = "windows")]
+    {
+        let shell = std::env::var("COMSPEC").ok()?;
+        let name = shell.rsplit('\\').next().unwrap_or(&shell).to_string();
+        Some((name, None))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let shell = crate::util::parent_comm(is_shell_name)
+            .or_else(|| std::env::var("SHELL").ok())?;
+        let name = shell.rsplit('/').next().unwrap_or(&shell).to_string();
+        let version = get_cmd_version(&shell);
+        Some((name, version))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -915,7 +1020,11 @@ pub fn gather_wm() -> Option<String> {
     {
         return Some("Aqua".to_string());
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        return Some("Desktop Window Manager".to_string());
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _wayland = std::env::var("WAYLAND_DISPLAY").ok();
         let _session = std::env::var("XDG_SESSION_TYPE").ok();
@@ -1074,7 +1183,11 @@ pub fn gather_cpu() -> Option<String> {
             Some(name)
         }
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        ps("$c=(Get-CimInstance Win32_Processor)[0]; \"{0} ({1}) cores @ {2} GHz\" -f $c.Name,$c.NumberOfCores,[math]::Round($c.MaxClockSpeed/1000,2)")
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let mut name = String::new();
         let mut cores = 0i32;
@@ -1249,7 +1362,21 @@ pub fn gather_gpus() -> Vec<(String, String)> {
         }
         out
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        let mut out = Vec::new();
+        if let Some(text) = ps("Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name")
+        {
+            for line in text.lines() {
+                let line = line.trim();
+                if !line.is_empty() {
+                    out.push(("GPU".to_string(), line.to_string()));
+                }
+            }
+        }
+        out
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let mut out = Vec::new();
         let dir = match std::fs::read_dir("/sys/class/drm") {
@@ -1411,7 +1538,16 @@ pub fn gather_memory() -> Option<(String, i32)> {
             pct,
         ))
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        let text = ps("$m=Get-CimInstance Win32_OperatingSystem; $t=$m.TotalVisibleMemorySize; $f=$m.FreePhysicalMemory; $u=$t-$f; $pct=if($t-gt0){[math]::Round($u*100/$t)}else{0}; $u/1048576; $t/1048576; $pct")?;
+        let mut lines = text.lines();
+        let used_gib: f32 = lines.next()?.trim().parse().ok()?;
+        let total_gib: f32 = lines.next()?.trim().parse().ok()?;
+        let pct: i32 = lines.next()?.trim().parse().ok().unwrap_or(0);
+        Some((format!("{used_gib:.2} GiB / {total_gib:.2} GiB ({pct}%)"), pct))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let text = std::fs::read_to_string("/proc/meminfo").ok()?;
         let total = meminfo_value(&text, "MemTotal:")?;
@@ -1492,7 +1628,19 @@ pub fn gather_swap() -> Option<(String, i32)> {
             pct,
         ))
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        let text = ps("$p=(Get-CimInstance Win32_PageFile)[0]; $t=$p.MaximumSize; $u=$p.CurrentUsage; $pct=if($t-gt0){[math]::Round($u*100/$t)}else{0}; $u; $t; $pct")?;
+        let mut lines = text.lines();
+        let used_mb: f32 = lines.next()?.trim().parse().ok()?;
+        let total_mb: f32 = lines.next()?.trim().parse().ok()?;
+        let pct: i32 = lines.next()?.trim().parse().ok().unwrap_or(0);
+        if total_mb <= 0.0 {
+            return None;
+        }
+        Some((format!("{used_mb:.2} MiB / {total_mb:.2} MiB ({pct}%)"), pct))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let text = std::fs::read_to_string("/proc/meminfo").ok()?;
         let total = meminfo_value(&text, "SwapTotal:")?;
@@ -1563,7 +1711,35 @@ pub fn gather_disk(path: &str) -> Option<(String, String, i32)> {
     {
         gather_disk_unix(path)
     }
-    #[cfg(not(unix))]
+    #[cfg(target_os = "windows")]
+    {
+        let drive = if path == "/" { "C:" } else { path };
+        let ps_cmd = format!(
+            "$d=Get-CimInstance Win32_LogicalDisk | Where-Object {{ $_.DeviceID -eq '{drive}' }}; $d.Size; $d.FreeSpace"
+        );
+        let text = ps(&ps_cmd)?;
+        let mut lines = text.lines();
+        let total_bytes: f64 = lines.next()?.trim().parse().ok()?;
+        let free_bytes: f64 = lines.next()?.trim().parse().ok()?;
+        if total_bytes <= 0.0 {
+            return None;
+        }
+        let used_gib = (total_bytes - free_bytes) / (1024.0 * 1024.0 * 1024.0);
+        let total_gib = total_bytes / (1024.0 * 1024.0 * 1024.0);
+        let pct = (used_gib * 100.0 / total_gib) as i32;
+        let color = if pct >= 80 {
+            "31"
+        } else if pct >= 50 {
+            "93"
+        } else {
+            "32"
+        };
+        let label = format!("Disk ({path})");
+        let value =
+            format!("{used_gib:.2} GiB / {total_gib:.2} GiB (\u{1b}[{color}m{pct}%\u{1b}[0m)");
+        Some((label, value, pct))
+    }
+    #[cfg(not(any(unix, target_os = "windows")))]
     {
         let _ = path;
         None
@@ -1627,7 +1803,15 @@ pub fn gather_battery() -> Option<(String, String)> {
         // IOKit binding is heavy; stubbed
         None
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        let text = ps("Get-CimInstance Win32_Battery | Select-Object -ExpandProperty EstimatedChargeRemaining")?;
+        let pct: i32 = text.trim().parse().ok()?;
+        let label = "Battery".to_string();
+        let value = format!("{pct}%");
+        Some((label, value))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let ps_dir = match std::fs::read_dir("/sys/class/power_supply") {
             Ok(d) => d,
@@ -1994,7 +2178,28 @@ pub fn gather_ips() -> Vec<(String, String)> {
         }
         out
     }
-    #[cfg(not(unix))]
+    #[cfg(target_os = "windows")]
+    {
+        let mut out = Vec::new();
+        if let Ok(outp) = std::process::Command::new("ipconfig").output() {
+            let text = String::from_utf8_lossy(&outp.stdout);
+            for line in text.lines() {
+                if let Some((_key, val)) = line.split_once(':') {
+                    let key = _key.trim();
+                    let val = val.trim();
+                    if key.contains("IPv4 Address")
+                        && !val.is_empty()
+                        && !val.starts_with("127.")
+                        && !val.starts_with("169.254.")
+                    {
+                        out.push(("Local IP".to_string(), val.to_string()));
+                    }
+                }
+            }
+        }
+        out
+    }
+    #[cfg(not(any(unix, target_os = "windows")))]
     {
         Vec::new()
     }

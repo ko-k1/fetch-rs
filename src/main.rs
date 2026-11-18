@@ -21,6 +21,8 @@ use shading::select_shading;
 use terminal::cleanup_terminal;
 #[cfg(unix)]
 use terminal::{signal_handler, setup_raw_mode, winch_handler};
+#[cfg(target_os = "windows")]
+use terminal::setup_raw_mode;
 
 use app::App;
 use runloop::run;
@@ -222,7 +224,9 @@ fn main() {
         i += 1;
     }
 
-    let home = env::var("HOME").unwrap_or_default();
+    let home = env::var("HOME")
+        .or_else(|_| env::var("USERPROFILE"))
+        .unwrap_or_default();
     let mut config = config::load_config(&home);
 
     // CLI overrides (C applies them after load_config)
@@ -300,9 +304,12 @@ fn main() {
     app.build_points_and_projection();
     app.tighten_render_height();
 
-    #[cfg(unix)]
+    #[cfg(any(unix, target_os = "windows"))]
     {
         setup_raw_mode();
+    }
+    #[cfg(unix)]
+    {
         unsafe {
             libc::signal(libc::SIGINT, signal_handler as *const () as usize);
             libc::signal(libc::SIGTERM, signal_handler as *const () as usize);

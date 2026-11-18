@@ -460,6 +460,10 @@ impl App {
                 }
             }
         }
+        #[cfg(target_os = "windows")]
+        {
+            host = std::env::var("COMPUTERNAME").unwrap_or_default();
+        }
         let line = format!(
             "\u{1b}[1;{}m{}\u{1b}[0m@\u{1b}[1;{}m{}\u{1b}[0m",
             self.config.label_color, user, self.config.label_color, host
