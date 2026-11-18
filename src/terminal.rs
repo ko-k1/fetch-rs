@@ -92,6 +92,8 @@ mod imp {
     const ENABLE_LINE_INPUT: u32 = 0x0002;
     const ENABLE_PROCESSED_INPUT: u32 = 0x0001;
     const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x0004;
+    const ENABLE_QUICK_EDIT_MODE: u32 = 0x0040;
+    const ENABLE_WINDOW_INPUT: u32 = 0x0008;
 
     #[repr(C)]
     struct COORD {
@@ -154,13 +156,20 @@ mod imp {
 
     pub fn setup_raw_mode() {
         unsafe {
-            // --- Input: disable echo/line/processed input ---
+            // --- Input: disable echo/line/processed input, disable Quick Edit
+            // (clicking to select text pauses output on Windows), enable window
+            // input so resize events are delivered ---
             let hin = GetStdHandle(STD_INPUT_HANDLE);
             if !hin.is_null() {
                 let mut mode: u32 = 0;
                 if GetConsoleMode(hin, &mut mode) != 0 {
                     ORIG_INPUT_MODE = mode;
-                    let raw = mode & !(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT);
+                    let raw = mode
+                        & !(ENABLE_ECHO_INPUT
+                            | ENABLE_LINE_INPUT
+                            | ENABLE_PROCESSED_INPUT
+                            | ENABLE_QUICK_EDIT_MODE)
+                        | ENABLE_WINDOW_INPUT;
                     let _ = SetConsoleMode(hin, raw);
                 }
             }
@@ -178,7 +187,8 @@ mod imp {
 
             MODE_SAVED = true;
 
-            // Register Ctrl-C / close handler so the terminal is restored on exit.
+            // Register Ctrl-C / close handler so the terminal is restored and
+            // the process exits (matches Unix `_exit(0)` behaviour).
             let _ = SetConsoleCtrlHandler(Some(signal_handler), 1);
         }
     }
@@ -204,7 +214,10 @@ mod imp {
         unsafe {
             cleanup_terminal();
         }
-        1
+        // Terminate immediately, matching Unix `_exit(0)`. Returning without
+        // exiting would leave the program running with a restored (non-ANSI)
+        // terminal, which makes the screen appear frozen.
+        std::process::exit(0);
     }
 
     pub extern "system" fn winch_handler(_ctrl_type: u32) -> i32 {
