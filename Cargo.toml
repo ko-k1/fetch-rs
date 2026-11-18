@@ -1,0 +1,12 @@
+[package]
+name = "fetch-rs"
+version = "0.1.0"
+edition = "2024"
+description = "Rust port of the fetch system-info tool: a rotating 3D logo plus OS/host/kernel/CPU/GPU/memory/disk/IP/battery info"
+license = "MIT"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[profile.release]
+opt-level = 3

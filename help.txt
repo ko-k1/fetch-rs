@@ -1,0 +1,21 @@
+Usage: fetch [options]
+
+Options:
+-l, --logo <name>         Use a logo from fastfetch by name
+--rotate-x                Lock rotation to X axis only
+--rotate-y                Lock rotation to Y axis only
+-s, --speed <float>       Speed multiplier (default 1.0)
+--size <float>            Scale the logo (e.g. 2.0 for double size)
+--depth <float>           Scale the 3D depth (default 1.0)
+--height <n>              Override render height in rows
+--no-info                 Just the logo, no system info
+--no-color                Disable logo coloring
+--frames <n>              Stop after n frames (default: run until keypress)
+--shading-mode <mode>     ascii (default), blocks or sextants
+--shading-chars <str>     Custom shading ramp, supports UTF-8
+--box                     Draw a border box around the info block
+-V, --version             Show version
+-h, --help                Show this help
+
+Config: ~/.config/fetch/config
+
