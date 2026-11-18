@@ -112,12 +112,6 @@ impl App {
             }
             if !got_logo && logo.rows.is_empty() {
                 logo::load_default_logo(&mut logo);
-                if !distro.is_empty() && distro.to_lowercase() != "gentoo" {
-                    eprintln!(
-                        "fetch: couldn't load {} logo (is fastfetch installed?). using built-in gentoo logo.",
-                        distro
-                    );
-                }
             }
         }
 
