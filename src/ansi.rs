@@ -18,6 +18,10 @@ pub fn skip_ansi(p: &[u8]) -> usize {
         return 0;
     }
     let mut i = 2;
+    // CSI private-mode prefix (e.g. '?' in ESC[?25h, ESC[?1002h)
+    if i < p.len() && matches!(p[i], b'?' | b'<' | b'=' | b'>') {
+        i += 1;
+    }
     while i < p.len() && ((p[i] as char).is_ascii_digit() || p[i] == b';') {
         i += 1;
     }

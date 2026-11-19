@@ -2,11 +2,24 @@
 
 use std::ffi::c_char;
 
+/// Remove NUL bytes and other C0 control characters (except tab) from text
+/// read from sysfs/DMI/firmware files, so embedded NUL padding never leaks
+/// into terminal output.
+fn strip_control_chars(s: &str) -> String {
+    s.chars()
+        .filter(|c| {
+            let n = *c as u32;
+            n == 0x09 || n > 0x1F // keep tab; drop NUL and C0 controls
+        })
+        .collect()
+}
+
 /// Strip a trailing newline/cr and surrounding quotes from a string.
 pub fn strip_quotes(s: &str) -> String {
     let s = s.trim_end_matches(['\n', '\r']);
     let s = s.trim_start_matches(['\'', '"']);
-    s.trim_end_matches(['\'', '"']).to_string()
+    let s = s.trim_end_matches(['\'', '"']).to_string();
+    strip_control_chars(&s)
 }
 
 /// Read the first line of a file, trimming line endings.
@@ -14,7 +27,7 @@ pub fn read_first_line(path: &str) -> Option<String> {
     std::fs::read_to_string(path).ok().and_then(|t| {
         t.lines()
             .next()
-            .map(|l| l.trim_end_matches(['\n', '\r']).to_string())
+            .map(|l| strip_control_chars(l.trim_end_matches(['\n', '\r'])))
     })
 }
 

@@ -303,10 +303,8 @@ fn main() {
     app.build_points_and_projection();
     app.tighten_render_height();
 
-    #[cfg(any(unix, target_os = "windows"))]
-    {
-        setup_raw_mode();
-    }
+    // Signal handlers must be installed before entering raw mode so that a
+    // signal arriving mid-setup still restores the terminal.
     #[cfg(unix)]
     {
         unsafe {
@@ -318,17 +316,6 @@ fn main() {
 
     let stdout = io::stdout();
     let mut out = stdout.lock();
-
-    // Signal handlers must be installed before entering raw mode so that a
-    // signal arriving mid-setup still restores the terminal.
-    #[cfg(unix)]
-    {
-        unsafe {
-            libc::signal(libc::SIGINT, signal_handler as *const () as usize);
-            libc::signal(libc::SIGTERM, signal_handler as *const () as usize);
-            libc::signal(libc::SIGWINCH, winch_handler as *const () as usize);
-        }
-    }
 
     #[cfg(any(unix, target_os = "windows"))]
     {
