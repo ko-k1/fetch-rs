@@ -80,10 +80,12 @@ fn uname_fields() -> Option<(String, String, String)> {
     None
 }
 
-// ---------------------------------------------------------------------------
-// Run `<bin> --version` and extract the first version-looking token
-// ---------------------------------------------------------------------------
-
+/// Run `<bin> --version` and extract the first version-looking token.
+///
+/// Unix-only: shells out to `sh -c`. On non-Unix platforms a stub returns
+/// `None` since `sh` is not available.
+///
+#[cfg(unix)]
 pub fn get_cmd_version(bin: &str) -> Option<String> {
     if bin.is_empty()
         || !bin.bytes().all(|c| {
@@ -112,6 +114,11 @@ pub fn get_cmd_version(bin: &str) -> Option<String> {
     } else {
         Some(ver.to_string())
     }
+}
+
+#[cfg(not(unix))]
+pub fn get_cmd_version(_bin: &str) -> Option<String> {
+    None
 }
 
 // ---------------------------------------------------------------------------
