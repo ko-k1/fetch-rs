@@ -4,6 +4,7 @@
 //! info lines, …) and the per-frame render pass.
 
 use std::env;
+use std::ffi::c_char;
 
 use crate::ansi::{emit_clipped, visible_width};
 use crate::config::{self, Config, F_BATTERY, F_CUSTOM_BASE, F_MEMORY, MAX_CUSTOM, F_SEPARATOR, F_SWAP, F_UPTIME};
@@ -22,7 +23,6 @@ use crate::terminal::get_term_size;
 pub struct App {
     pub config: Config,
     pub distro: String,
-    pub distro_id_like: String,
     pub logo: Logo,
     pub shading: Shading,
     pub sub_rows: i32,
@@ -143,7 +143,6 @@ impl App {
         let mut app = Self {
             config,
             distro,
-            distro_id_like,
             logo,
             shading,
             sub_rows: sub_rows as i32,
@@ -447,7 +446,7 @@ impl App {
         let mut host = String::new();
         #[cfg(unix)]
         {
-            let mut buf = [0i8; 64];
+            let mut buf = [0 as c_char; 64];
             unsafe {
                 if libc::gethostname(buf.as_mut_ptr(), buf.len()) == 0 {
                     host = crate::util::cstr_from_buf(&buf);

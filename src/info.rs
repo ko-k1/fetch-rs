@@ -2,6 +2,9 @@
 //! Linux implementations use /proc, /sys and libc; other platforms get
 //! best-effort or stubbed versions so the code compiles everywhere.
 
+#[cfg(target_os = "macos")]
+use std::ffi::c_char;
+
 use crate::util::{cstr_from_buf, cstr_from_ptr, read_first_line, read_ppid_for, strip_quotes};
 
 // ---------------------------------------------------------------------------
@@ -118,11 +121,11 @@ pub fn get_cmd_version(bin: &str) -> Option<String> {
 pub fn gather_os() -> Option<String> {
     #[cfg(target_os = "macos")]
     {
-        let mut buf = [0i8; 64];
+        let mut buf = [0 as c_char; 64];
         let mut len: libc::size_t = buf.len();
         let ok = unsafe {
             libc::sysctlbyname(
-                b"kern.osproductversion\0".as_ptr(),
+                b"kern.osproductversion\0".as_ptr() as *const c_char,
                 buf.as_mut_ptr() as *mut _,
                 &mut len,
                 std::ptr::null_mut(),
@@ -196,11 +199,11 @@ pub fn gather_os() -> Option<String> {
 pub fn gather_host() -> Option<String> {
     #[cfg(target_os = "macos")]
     {
-        let mut buf = [0i8; 128];
+        let mut buf = [0 as c_char; 128];
         let mut len: libc::size_t = buf.len();
         let ok = unsafe {
             libc::sysctlbyname(
-                b"hw.model\0".as_ptr(),
+                b"hw.model\0".as_ptr() as *const c_char,
                 buf.as_mut_ptr() as *mut _,
                 &mut len,
                 std::ptr::null_mut(),
@@ -281,7 +284,7 @@ pub fn gather_uptime() -> Option<String> {
         let mut len: libc::size_t = std::mem::size_of::<libc::timeval>();
         if unsafe {
             libc::sysctlbyname(
-                b"kern.boottime\0".as_ptr(),
+                b"kern.boottime\0".as_ptr() as *const c_char,
                 &mut bt as *mut _ as *mut _,
                 &mut len,
                 std::ptr::null_mut(),
@@ -291,7 +294,12 @@ pub fn gather_uptime() -> Option<String> {
         {
             return None;
         }
-        let secs = unsafe { libc::time(std::ptr::null_mut()) } - bt.tv_sec;
+        let mut secs = unsafe { libc::time(std::ptr::null_mut()) } - bt.tv_sec;
+        if secs < 0 {
+            // Clock skew can make the boot time appear in the future; clamp
+            // rather than reporting a negative uptime.
+            secs = 0;
+        }
         Some(format_uptime(secs))
     }
     #[cfg(target_os = "windows")]
@@ -563,6 +571,8 @@ pub fn gather_shell() -> Option<(String, Option<String>)> {
 
 #[cfg(target_os = "linux")]
 mod drm {
+    use std::ffi::c_char;
+
     const _IOC_READ: u32 = 0x80000000;
     const _IOC_WRITE: u32 = 0x40000000;
 
@@ -637,7 +647,9 @@ mod drm {
 
     pub fn drm_active_mode(card: &str, conn_id: u32) -> Option<(i32, i32, f32, i32, i32)> {
         let dev = format!("/dev/dri/{card}");
-        let fd = unsafe { libc::open(dev.as_ptr() as *const i8, libc::O_RDONLY | libc::O_CLOEXEC) };
+        let fd = unsafe {
+            libc::open(dev.as_ptr() as *const c_char, libc::O_RDONLY | libc::O_CLOEXEC)
+        };
         if fd < 0 {
             return None;
         }
@@ -1154,11 +1166,11 @@ fn sysctl_long_macos(name: &str) -> i64 {
 pub fn gather_cpu() -> Option<String> {
     #[cfg(target_os = "macos")]
     {
-        let mut buf = [0i8; 128];
+        let mut buf = [0 as c_char; 128];
         let mut len: libc::size_t = buf.len();
         if unsafe {
             libc::sysctlbyname(
-                b"machdep.cpu.brand_string\0".as_ptr(),
+                b"machdep.cpu.brand_string\0".as_ptr() as *const c_char,
                 buf.as_mut_ptr() as *mut _,
                 &mut len,
                 std::ptr::null_mut(),
@@ -1575,58 +1587,10 @@ pub fn gather_memory() -> Option<(String, i32)> {
 pub fn gather_swap() -> Option<(String, i32)> {
     #[cfg(target_os = "macos")]
     {
-        let mut buf = [0i8; 256];
-        let mut len: libc::size_t = buf.len();
-        if unsafe {
-            libc::sysctlbyname(
-                b"vm.swapusage\0".as_ptr(),
-                buf.as_mut_ptr() as *mut _,
-                &mut len,
-                std::ptr::null_mut(),
-                0,
-            )
-        } != 0
-        {
-            return None;
-        }
-        let swapstr = cstr_from_buf(&buf);
-        let mut total_mb = 0.0f32;
-        let mut used_mb = 0.0f32;
-        if let Some(start) = swapstr.find("total ") {
-            let rest = &swapstr[start + "total ".len()..];
-            let mut parts = rest.split_whitespace();
-            total_mb = parts
-                .next()
-                .unwrap_or("0")
-                .trim_end_matches('M')
-                .parse()
-                .unwrap_or(0.0);
-        }
-        if let Some(start) = swapstr.find("used ") {
-            let rest = &swapstr[start + "used ".len()..];
-            used_mb = rest
-                .split_whitespace()
-                .next()
-                .unwrap_or("0")
-                .trim_end_matches('M')
-                .parse()
-                .unwrap_or(0.0);
-        }
-        if total_mb <= 0.0 {
-            return None;
-        }
-        let pct = (used_mb * 100.0 / total_mb) as i32;
-        let color = if pct >= 80 {
-            "31"
-        } else if pct >= 50 {
-            "93"
-        } else {
-            "32"
-        };
-        Some((
-            format!("{used_mb:.2} MiB / {total_mb:.2} MiB (\u{1b}[{color}m{pct}%\u{1b}[0m)"),
-            pct,
-        ))
+        // `vm.swapusage` returns a binary `struct xsw_usage`, not a NUL-
+        // terminated string; reading it as C text produces garbage. Stubbed
+        // until it can be read into the proper struct layout.
+        return None;
     }
     #[cfg(target_os = "windows")]
     {

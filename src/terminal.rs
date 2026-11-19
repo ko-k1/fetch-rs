@@ -10,6 +10,21 @@ use std::sync::atomic::AtomicBool;
 /// render loop so a terminal resize triggers a relayout.
 pub static TERM_RESIZED: AtomicBool = AtomicBool::new(false);
 
+/// RAII guard that restores the terminal on drop.
+///
+/// Ensures the terminal is left in a usable state even if `run()` panics or
+/// the program returns early, instead of leaving it in raw mode (no echo, no
+/// line buffering) which makes the session appear broken.
+pub struct TerminalGuard;
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        unsafe {
+            cleanup_terminal();
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Unix implementation
 // ---------------------------------------------------------------------------

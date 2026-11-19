@@ -18,7 +18,6 @@ use std::{env, io::{self, Write}, process};
 
 use render::{apply_layout, MAX_HEIGHT};
 use shading::select_shading;
-use terminal::cleanup_terminal;
 #[cfg(unix)]
 use terminal::{signal_handler, setup_raw_mode, winch_handler};
 #[cfg(target_os = "windows")]
@@ -319,11 +318,29 @@ fn main() {
 
     let stdout = io::stdout();
     let mut out = stdout.lock();
+
+    // Signal handlers must be installed before entering raw mode so that a
+    // signal arriving mid-setup still restores the terminal.
+    #[cfg(unix)]
+    {
+        unsafe {
+            libc::signal(libc::SIGINT, signal_handler as *const () as usize);
+            libc::signal(libc::SIGTERM, signal_handler as *const () as usize);
+            libc::signal(libc::SIGWINCH, winch_handler as *const () as usize);
+        }
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    {
+        setup_raw_mode();
+    }
+
+    // RAII guard: always restore the terminal on scope exit, even if run()
+    // panics or we return early.
+    let _guard = terminal::TerminalGuard;
+
     run(&mut app, &mut out);
 
-    unsafe {
-        cleanup_terminal();
-    }
     let _ = out.write_all(b"\x1b[?25h");
     let _ = out.flush();
 }

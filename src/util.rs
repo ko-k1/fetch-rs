@@ -1,5 +1,7 @@
 //! Small shared helpers used by multiple info-gathering modules.
 
+use std::ffi::c_char;
+
 /// Strip a trailing newline/cr and surrounding quotes from a string.
 pub fn strip_quotes(s: &str) -> String {
     let s = s.trim_end_matches(['\n', '\r']);
@@ -18,7 +20,7 @@ pub fn read_first_line(path: &str) -> Option<String> {
 
 /// Read a NUL-terminated C string from a fixed-size `i8` buffer, lossily
 /// converting to UTF-8 so system strings are never silently dropped.
-pub fn cstr_from_buf<const N: usize>(buf: &[i8; N]) -> String {
+pub fn cstr_from_buf<const N: usize>(buf: &[c_char; N]) -> String {
     let len = buf.iter().position(|&c| c == 0).unwrap_or(N);
     let bytes: Vec<u8> = buf[..len].iter().copied().map(|b| b as u8).collect();
     String::from_utf8_lossy(&bytes).into_owned()
@@ -26,7 +28,7 @@ pub fn cstr_from_buf<const N: usize>(buf: &[i8; N]) -> String {
 
 /// Read a NUL-terminated C string from a raw pointer, lossily converting to
 /// UTF-8 so system strings are never silently dropped.
-pub unsafe fn cstr_from_ptr(ptr: *const i8) -> String {
+pub unsafe fn cstr_from_ptr(ptr: *const c_char) -> String {
     if ptr.is_null() {
         return String::new();
     }

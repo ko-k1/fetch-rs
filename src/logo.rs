@@ -27,10 +27,6 @@ impl Logo {
             distro_hint: String::new(),
         }
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.rows.is_empty()
-    }
 }
 
 // Process a logo row: split into codepoints, extracting ANSI colors.
