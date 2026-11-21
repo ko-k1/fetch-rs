@@ -3,7 +3,7 @@
 use std::io::Write;
 use std::sync::atomic::Ordering;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::System::Console::{
@@ -238,7 +238,16 @@ pub fn run(app: &mut App, out: &mut impl Write) {
     let _ = out.flush();
 
     let mut frame = 0;
+    // Target ~60 FPS (16.67 ms per frame). On Windows the console's ANSI
+    // processing is slower than on Linux/macOS terminals, so we measure each
+    // frame's real duration and only sleep the remaining time instead of a
+    // fixed 50 ms. This lets the animation run as fast as the terminal can
+    // keep up with rather than being artificially capped at 20 FPS.
+    let target_frame_time = Duration::from_millis(16);
+
     while app.max_frames == 0 || frame < app.max_frames {
+        let frame_start = Instant::now();
+
         if read_input(app) {
             break;
         }
@@ -271,9 +280,6 @@ pub fn run(app: &mut App, out: &mut impl Write) {
                 let _ = out.write_all(b"\x1b[2J");
             }
         }
-        if app.show_info && frame > 0 && frame % 20 == 0 {
-            app.refresh_pass();
-        }
         if !app.mouse_dragging {
             if app.drag_vx != 0.0 || app.drag_vy != 0.0 {
                 app.a += app.drag_vx;
@@ -291,7 +297,11 @@ pub fn run(app: &mut App, out: &mut impl Write) {
         let frame_bytes = app.render_frame();
         let _ = out.write_all(&frame_bytes);
         let _ = out.flush();
-        thread::sleep(Duration::from_millis(50));
+
+        let elapsed = frame_start.elapsed();
+        if elapsed < target_frame_time {
+            thread::sleep(target_frame_time - elapsed);
+        }
         frame += 1;
     }
 }

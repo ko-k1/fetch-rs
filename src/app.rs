@@ -5,9 +5,10 @@
 
 use std::env;
 use std::ffi::c_char;
+use std::sync::{Arc, Mutex};
 
 use crate::ansi::{emit_clipped, visible_width};
-use crate::config::{self, Config, F_BATTERY, F_CUSTOM_BASE, F_MEMORY, MAX_CUSTOM, F_SEPARATOR, F_SWAP, F_UPTIME};
+use crate::config::{self, Config, F_CUSTOM_BASE, MAX_CUSTOM, F_SEPARATOR};
 use crate::distro;
 use crate::info::{self, COLOR_LINES};
 use crate::logo::{self, Logo};
@@ -28,6 +29,11 @@ pub struct App {
     pub sub_rows: i32,
     pub sub_cols: i32,
     pub layout: Layout,
+    /// Render cache of the info block. The fast-changing fields (uptime,
+    /// memory, swap, battery) are refreshed by a background thread so that
+    /// spawning PowerShell on Windows can never block — and freeze — the
+    /// animation render loop.
+    pub info_cache: Arc<Mutex<Vec<String>>>,
     pub buffers: Buffers,
     pub points: Option<Points>,
     pub fetch_lines: Vec<String>,
@@ -148,6 +154,7 @@ impl App {
             sub_rows: sub_rows as i32,
             sub_cols: sub_cols as i32,
             layout,
+            info_cache: Arc::new(Mutex::new(Vec::new())),
             buffers,
             points: None,
             fetch_lines: Vec::new(),
@@ -416,29 +423,6 @@ impl App {
         self.current_field = -1;
     }
 
-    /// Re-gather the fast-changing fields in place during the animation.
-    pub(crate) fn refresh_pass(&mut self) {
-        self.is_refresh_pass = true;
-        self.current_field = F_UPTIME as i32;
-        if let Some(v) = info::gather_uptime() {
-            self.add_info("Uptime", &v);
-        }
-        self.current_field = F_MEMORY as i32;
-        if let Some((v, _pct)) = info::gather_memory() {
-            self.add_info("Memory", &v);
-        }
-        self.current_field = F_SWAP as i32;
-        if let Some((v, _pct)) = info::gather_swap() {
-            self.add_info("Swap", &v);
-        }
-        self.current_field = F_BATTERY as i32;
-        if let Some((label, val)) = info::gather_battery() {
-            self.add_info(&label, &val);
-        }
-        self.current_field = -1;
-        self.is_refresh_pass = false;
-    }
-
     fn gather_title(&mut self) {
         let user = env::var("LOGNAME")
             .or_else(|_| env::var("USER"))
@@ -551,13 +535,15 @@ impl App {
 
 impl App {
     fn get_alignment_padding(&self) -> (i32, i32) {
+        let cache = self.info_cache.lock().unwrap();
         let mut maxw = 0usize;
-        for line in &self.fetch_lines {
+        for line in cache.iter() {
             let w = visible_width(line);
             if w > maxw {
                 maxw = w;
             }
         }
+        drop(cache);
         let vertical = match self.config.config_v_alignment {
             config::VAlign::Top => 0,
             config::VAlign::Center => self.term_rows / 2 - self.layout.render_height / 2,
@@ -573,6 +559,14 @@ impl App {
             }
         };
         (vertical, horizontal)
+    }
+
+    /// Clone the info line at `idx` from the render cache. The background
+    /// refresh thread only holds the cache lock briefly, so this never
+    /// blocks the animation loop for more than a few microseconds.
+    fn info_line(&self, idx: usize) -> Option<String> {
+        let cache = self.info_cache.lock().unwrap();
+        cache.get(idx).cloned()
     }
 
     pub(crate) fn build_points_and_projection(&mut self) {
@@ -809,14 +803,15 @@ impl App {
             }
 
             let fi = i as i32 - self.fetch_start;
-            if !self.layout.layout_stacked && fi >= 0 && fi < self.fetch_lines.len() as i32 {
-                for _ in 0..render::GAP {
-                    out.push(b' ');
+            if !self.layout.layout_stacked && fi >= 0 {
+                if let Some(line) = self.info_line(fi as usize) {
+                    for _ in 0..render::GAP {
+                        out.push(b' ');
+                    }
+                    let mut buf = [0u8; 512];
+                    let n = emit_clipped(&mut buf, &line, self.layout.info_clip_cols);
+                    out.extend_from_slice(&buf[..n]);
                 }
-                let line = &self.fetch_lines[fi as usize];
-                let mut buf = [0u8; 512];
-                let n = emit_clipped(&mut buf, line, self.layout.info_clip_cols);
-                out.extend_from_slice(&buf[..n]);
             }
 
             out.extend_from_slice(clr_seq);
@@ -829,10 +824,11 @@ impl App {
                 out.push(b'\n');
             }
             for i in 0..self.layout.stacked_info_rows {
-                let line = &self.fetch_lines[i as usize];
-                let mut buf = [0u8; 512];
-                let n = emit_clipped(&mut buf, line, self.layout.info_clip_cols);
-                out.extend_from_slice(&buf[..n]);
+                if let Some(line) = self.info_line(i as usize) {
+                    let mut buf = [0u8; 512];
+                    let n = emit_clipped(&mut buf, &line, self.layout.info_clip_cols);
+                    out.extend_from_slice(&buf[..n]);
+                }
                 out.extend_from_slice(clr_seq);
                 out.push(b'\n');
             }
@@ -840,6 +836,22 @@ impl App {
 
         out
     }
+}
+
+/// Format one info line exactly like `App::add_info`, including optional box
+/// padding, so the background refresh thread produces identical output.
+pub(crate) fn format_info_line(label_color: &str, label: &str, value: &str, box_width: i32) -> String {
+    let line = format!("\u{1b}[1;{}m{}\u{1b}[0m: {}", label_color, label, value);
+    if box_width > 0 {
+        let w = visible_width(&line);
+        let mut pad = box_width - w as i32;
+        if pad < 0 {
+            pad = 0;
+        }
+        let pad_str = " ".repeat(pad.max(0) as usize);
+        return format!("\u{2502} {line}{pad_str} \u{2502}");
+    }
+    line
 }
 
 fn cell_glyph_opt<'a>(

@@ -40,15 +40,42 @@ fn count_file_lines(path: &str, prefix: Option<&str>) -> i32 {
 // PowerShell helper (Windows)
 // ---------------------------------------------------------------------------
 
+/// Run a PowerShell command with a bounded timeout. PowerShell startup can be
+/// slow, and a hung PowerShell (e.g. waiting on input or blocked by execution
+/// policy) must not block startup or the background info-refresh thread
+/// indefinitely — otherwise the logo animation would freeze.
 #[cfg(target_os = "windows")]
 fn ps(command: &str) -> Option<String> {
-    let out = std::process::Command::new("powershell")
+    use std::io::Read;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    let mut child = std::process::Command::new("powershell")
         .arg("-NoProfile")
         .arg("-Command")
         .arg(command)
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
         .ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
+    let mut stdout = child.stdout.take()?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+
+    loop {
+        match child.try_wait().ok()? {
+            Some(_status) => break, // process exited: read captured output below
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                return None; // hung: give up rather than freeze the animation
+            }
+            None => thread::sleep(Duration::from_millis(25)),
+        }
+    }
+
+    let mut text = String::new();
+    if stdout.read_to_string(&mut text).is_err() {
+        return None;
+    }
     let text = text.trim();
     if text.is_empty() {
         None

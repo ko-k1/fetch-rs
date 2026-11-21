@@ -14,7 +14,7 @@ mod shading;
 mod terminal;
 mod util;
 
-use std::{env, io::{self, Write}, process};
+use std::{env, io::{self, Write}, process, thread, time::Duration};
 
 use render::{apply_layout, MAX_HEIGHT};
 use shading::select_shading;
@@ -302,6 +302,65 @@ fn main() {
     );
     app.build_points_and_projection();
     app.tighten_render_height();
+
+    // Seed the render cache so the first frame already shows the gathered
+    // info. The background thread below keeps fast-changing fields fresh.
+    *app.info_cache.lock().unwrap() = app.fetch_lines.clone();
+
+    // Background thread: keep fast-changing fields (uptime, memory, swap,
+    // battery) fresh without blocking the render loop. On Windows each
+    // PowerShell spawn takes hundreds of ms to seconds; gathering them
+    // synchronously every 20 frames used to freeze the animation for seconds
+    // at a time. This thread gathers off the render path and only touches the
+    // cache lock for microseconds to publish the results.
+    if app.show_info {
+        let cache = app.info_cache.clone();
+        let box_width = app.box_width;
+        let label_color = app.config.label_color.clone();
+        let refresh_fields: Vec<(usize, String)> = [
+            (config::F_UPTIME, "Uptime"),
+            (config::F_MEMORY, "Memory"),
+            (config::F_SWAP, "Swap"),
+            (config::F_BATTERY, "Battery"),
+        ]
+        .into_iter()
+        .filter_map(|(field, label)| {
+            let idx = app.field_line[field];
+            if idx >= 0 {
+                Some((idx as usize, label.to_string()))
+            } else {
+                None
+            }
+        })
+        .collect();
+        thread::spawn(move || loop {
+            let mut updates = Vec::with_capacity(refresh_fields.len());
+            for (idx, label) in &refresh_fields {
+                let value = match label.as_str() {
+                    "Uptime" => info::gather_uptime(),
+                    "Memory" => info::gather_memory().map(|(v, _)| v),
+                    "Swap" => info::gather_swap().map(|(v, _)| v),
+                    "Battery" => info::gather_battery().map(|(_, v)| v),
+                    _ => None,
+                };
+                if let Some(value) = value {
+                    updates.push((
+                        *idx,
+                        app::format_info_line(&label_color, label, &value, box_width),
+                    ));
+                }
+            }
+            if !updates.is_empty() {
+                let mut cache = cache.lock().unwrap();
+                for (idx, line) in updates {
+                    if idx < cache.len() {
+                        cache[idx] = line;
+                    }
+                }
+            }
+            thread::sleep(Duration::from_secs(1));
+        });
+    }
 
     // Signal handlers must be installed before entering raw mode so that a
     // signal arriving mid-setup still restores the terminal.
