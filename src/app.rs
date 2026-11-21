@@ -535,7 +535,9 @@ impl App {
 
 impl App {
     fn get_alignment_padding(&self) -> (i32, i32) {
-        let cache = self.info_cache.lock().unwrap();
+        // Recover from a poisoned lock (background thread panicked while
+        // holding it) rather than crashing the render loop.
+        let cache = self.info_cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut maxw = 0usize;
         for line in cache.iter() {
             let w = visible_width(line);
@@ -565,7 +567,7 @@ impl App {
     /// refresh thread only holds the cache lock briefly, so this never
     /// blocks the animation loop for more than a few microseconds.
     fn info_line(&self, idx: usize) -> Option<String> {
-        let cache = self.info_cache.lock().unwrap();
+        let cache = self.info_cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         cache.get(idx).cloned()
     }
 

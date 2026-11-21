@@ -305,7 +305,7 @@ fn main() {
 
     // Seed the render cache so the first frame already shows the gathered
     // info. The background thread below keeps fast-changing fields fresh.
-    *app.info_cache.lock().unwrap() = app.fetch_lines.clone();
+    *app.info_cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = app.fetch_lines.clone();
 
     // Background thread: keep fast-changing fields (uptime, memory, swap,
     // battery) fresh without blocking the render loop. On Windows each
